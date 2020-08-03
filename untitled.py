@@ -6,7 +6,7 @@ Created on Fri Sep 21 15:18:07 2018
 """
 from PyQt5.QtCore import QCoreApplication
 import sys
-from new_k_evaporation import anneal_object
+from new_k_evaporation import AnnealObject
 
 app = QCoreApplication(sys.argv)
 
@@ -25,7 +25,7 @@ k_dictionary = dict(zip(K_col_headers,default_spectrum))
 
 
 
-test = anneal_object()
+test = AnnealObject()
 test.start(k_dictionary)
 
 

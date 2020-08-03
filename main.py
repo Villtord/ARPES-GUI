@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 """
+Photoemission experiment GUI.
+Requirements: SpecsLab Prodigy with enabled remote-in option, Specs Carving manipulator.
+3D data in a table must be in a form: X_start:X_end:X_number_of_points
+
+Last Updated: 30 July 2020
 Created on Wed Sep  5 15:33:05 2018
 
 @author: Victor Rogalev
@@ -8,14 +13,18 @@ Created on Wed Sep  5 15:33:05 2018
 26 October: save/load options for experiment added
 
 """
-import sys
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import pyqtSignal, QThreadPool
-from PyQt5.QtWidgets import QTableWidget, QApplication, QMainWindow, QTableWidgetItem, QComboBox, QFileDialog
 import pickle
-from MyTable import MyTable
-from communication_example import connection_object
-from new_k_evaporation import anneal_object
+import sys
+
+import numpy as np
+from PyQt5 import QtWidgets
+from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtWidgets import QApplication, QTableWidgetItem, QComboBox, QFileDialog
+
+from carving_object import CarvingObject
+from my_table import MyTable
+from new_k_evaporation import AnnealObject
+from prodigy_object import ProdigyObject
 
 
 class Window(QtWidgets.QWidget):
@@ -23,26 +32,31 @@ class Window(QtWidgets.QWidget):
 
     def __init__(self):
         super(self.__class__, self).__init__()
-        self.MyProdigy = connection_object()
-        self.KEvaporation = anneal_object()
+        self.MyProdigy = ProdigyObject()
+        self.MyCarving = CarvingObject()
+        # self.Doping = AnnealObject()
 
         self.MyProdigy.prodigy_connect()
-        self.MyProdigy.communication_end_trigger.connect(self.main_end_measurement)
+        self.MyProdigy.communication_end_trigger.connect(self.check_what_to_do_next)
+
+        self.MyCarving.finished_signal.connect(self.check_what_to_do_next)
+
         self.can_evaporate_trigger.connect(self.start_evaporation)
         "measure spectra when evaporation is done"
-        self.KEvaporation.evaporation_end_trigger.connect(self.evaporation_end)
+        # self.Doping.evaporation_end_trigger.connect(self.evaporation_end)
         # self.MyCarving.signals.progress.connect (self.reply_from_carving)
 
         self.setup_interface()
 
     def setup_interface(self):
-        """ Create photoemission table """
+        """ Create photoemission experiment table """
         self.ARPES_table = MyTable(1, 18)
-        self.ARPES_col_headers = [' Name ', 'Repeat', ' KE_start,eV ', ' KE_end,eV ', ' Step (FAT),eV ',
-                                  ' Samples (SFAT) ', ' E_pass,eV ', ' Lens_mode ',
-                                  ' Channels: E ', ' Channels: NE ', ' Dwell,s ', ' U_det,V ',
-                                  ' X ', ' Y ', ' Z ', ' Tilt ', ' Polar ', ' Azimuth ']
-
+        self.ARPES_col_headers = [
+            ' Name ', 'Repeat', ' KE_start,eV ', ' KE_end,eV ', ' Step (FAT),eV ',
+            ' Samples (SFAT) ', ' E_pass,eV ', ' Lens_mode ',
+            ' Channels: E ', ' Channels: NE ', ' Dwell,s ', ' U_det,V ',
+            ' X ', ' Y ', ' Z ', ' Polar ', ' Azimuth ', ' Tilt '
+        ]
         header_ARPES_table = self.ARPES_table.horizontalHeader()
         header_ARPES_table.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
 
@@ -50,10 +64,12 @@ class Window(QtWidgets.QWidget):
             header_ARPES_table.setSectionResizeMode(int(i), QtWidgets.QHeaderView.ResizeToContents)
 
         """ Set up default photoemission spectrum """
-        self.default_spectrum = ['Default', '1', '16.0', '17.0', '0',
-                                 '1', '10.0', 'WideAngleMode',
-                                 '100', '500', '1', '1450',
-                                 '12', '-8', '202', '0', '-130', '0']
+        self.default_spectrum = [
+            'TestTest', '10', '16.0', '17.0', '0',
+            '1', '10.0', 'WideAngleMode',
+            '100', '500', '1', '1450',
+            '8', '-8', '202', '-130', '0', '-5:5:21'
+        ]
 
         for i in range(len(self.default_spectrum)):
             number = QTableWidgetItem(self.default_spectrum[i])
@@ -71,11 +87,13 @@ class Window(QtWidgets.QWidget):
 
         """ Create K-dose table """
         self.K_table = MyTable(1, 16)
-        self.K_col_headers = ['Repeat N',
-                              'Ramp to,A 1', 'Ramp time,s 1', 'Hold time,s 1',
-                              'Ramp to,A 2', 'Ramp time,s 2', 'Hold time,s 2',
-                              'Ramp to,A 3', 'Ramp time,s 3', 'Hold time,s 3',
-                              ' X ', ' Y ', ' Z ', ' Tilt ', ' Polar ', ' Azimuth ']
+        self.K_col_headers = [
+            'Repeat N',
+            'Ramp to,A 1', 'Ramp time,s 1', 'Hold time,s 1',
+            'Ramp to,A 2', 'Ramp time,s 2', 'Hold time,s 2',
+            'Ramp to,A 3', 'Ramp time,s 3', 'Hold time,s 3',
+            ' X ', ' Y ', ' Z ', ' Polar ', ' Azimuth ', ' Tilt '
+        ]
 
         self.K_table.setHorizontalHeaderLabels(self.K_col_headers)
         header_K_table = self.K_table.horizontalHeader()
@@ -86,11 +104,13 @@ class Window(QtWidgets.QWidget):
             header_K_table.setSectionResizeMode(int(i), QtWidgets.QHeaderView.ResizeToContents)
 
         """ Set up default K-dose recipee """
-        self.default_spectrum = ['1',
-                                 '0.1', '1', '5',
-                                 '1.0', '5', '5',
-                                 '2.0', '5', '10',
-                                 '0.0', '0.0', '0.0', '0.0', '0.0', '90']
+        self.default_spectrum = [
+            '1',
+            '0.1', '1', '5',
+            '1.0', '5', '5',
+            '2.0', '5', '10',
+            '0.0', '0.0', '0.0', '0.0', '90', '0.0'
+        ]
         for i in range(len(self.default_spectrum)):
             number = QTableWidgetItem(self.default_spectrum[i])
             self.K_table.setCurrentCell(0, i)
@@ -125,10 +145,10 @@ class Window(QtWidgets.QWidget):
         self.setLayout(self.v_layout)
 
         self.K_table.setEnabled(False)
+
+        "Connect all signals and slots for buttons"
         self.k_radiobutton.clicked.connect(self.disable_k_table)
-
         self.start_button.clicked.connect(self.start)
-
         self.save_button.clicked.connect(self.save_file)
         self.load_button.clicked.connect(self.load_file)
 
@@ -194,111 +214,109 @@ class Window(QtWidgets.QWidget):
             self.K_table.setEnabled(False)
 
     def start(self):
-        self.fake_flag = False
-        self.k_wait_flag = False
-        self.dimension_info = {"Axis": [], "3D_min": [], "3D_delta": [], "Steps": []}
-        self.k_counter = 0
-        self.steps_counter = 0
-        self.dimension_steps = 1
-
+        """ Main action when user press the Start/Stop button. So far reads only first row from the table. Define
+         analyser dictionary with settings, manipulator positions dictionary and file details, then proceed further.
+         """
+        """ TODO: Check if files already exist - and delete them if yes !!! """
+        """ TODO: Make a dialog or choice in which directory to save !!!"""
         """ these are to account for measurement repeat cycles"""
-        self.repeat_counter = 1
-
-        """ Check if files already exist - and delete them if yes !!! """
-        """ Make a dialog or choice in which directory to save !!!"""
 
         if self.start_button.text() == 'Start':
             self.start_button.setText('Stop')
             self.ARPES_table.setEnabled(False)
 
-            """ Read spectra parameters from the table and make a dictionary out of them """
+            self.positions_counter = 1  # global counter for positions
+            self.repeat_counter = 1     # global repeat counter
+
+            """ Read all spectra parameters from the first row of the table and make a dictionary out of them """
+            """ TODO: Accept more than one row in ARPES table !!!"""
             self.values = [self.ARPES_table.item(0, int(col)).text() for col in range(self.ARPES_table.columnCount())]
             self.spectra_dictionary_original = dict(zip(self.ARPES_col_headers, self.values))
-
             self.spectra_dictionary_original[' Lens_mode '] = self.combo_box_lens.currentText()
+
+            # """Make a dictionary with file name and repeat cycles"""
+            # self.file_settings_dict = {key: self.spectra_dictionary_original[key] for key in
+            #                            self.ARPES_col_headers[0:2]}
+            #
+            # """Make a dictionary with analyser settings only"""
+            # self.analyser_settings_dict = {key: self.spectra_dictionary_original[key] for key in
+            #                                self.ARPES_col_headers[2:12]}
+
+            """ Make carving positions list for each point to measure: the arrays of positions for each axis. 
+            Number of points in each axis is either 1 or consistent in other axes maximum number.
+            TODO: include option to set up multi-axis-map measurement"""
+            self.axis_range = 0
+            self.carving_positions_dict = {}
+            for key in self.ARPES_col_headers[12:]:
+                if ":" in str(self.spectra_dictionary_original[key]):
+                    v = str(self.spectra_dictionary_original[key]).split(":")
+                    self.carving_positions_dict[key] = np.linspace(float(v[0]), float(v[1]), int(v[2]))
+                    self.axis_range = len(self.carving_positions_dict[key])
+                else:
+                    self.carving_positions_dict[key] = np.linspace(float(self.spectra_dictionary_original[key]),
+                                                                   float(self.spectra_dictionary_original[key]),
+                                                                   1)
+            print("max number of points for 1 axis: ", self.axis_range)
+            if self.axis_range > 0:
+                for key in self.carving_positions_dict.keys():
+                    print (self.carving_positions_dict[key])
+                    if len(self.carving_positions_dict[key]) == 1:
+                        self.carving_positions_dict[key] = np.linspace(
+                            self.carving_positions_dict[key][0],
+                            self.carving_positions_dict[key][0],
+                            int(self.axis_range)
+                        )
 
             """ Read K-dope parameters from the table and make a dictionary out of them """
             self.values = [self.K_table.item(0, int(col)).text() for col in range(self.K_table.columnCount())]
             self.k_dictionary = dict(zip(self.K_col_headers, self.values))
 
-            """ Check if the data that one needs to measure are 3D data: make self.dimension_info in a
-            form of a dictionary with list of arguments self.dimension_info == {"Axis":["X"],"3D_min":[0],"3D_delta":[1],"Steps":[1]}
-            3D data in a table must be in a form: X_start:X_delta:X_end """
-
-            for i, j in self.spectra_dictionary_original.items():
-                key = str(i)
-                value = str(j)
-                if ":" in value:
-                    values_list = value.split(":")
-                    steps = int((float(values_list[2]) - float(values_list[0])) / float(values_list[1]) + 1)
-                    self.dimension_info["Axis"].append(key)
-                    self.dimension_info["3D_min"].append(values_list[0])
-                    self.dimension_info["3D_delta"].append(values_list[1])
-                    self.dimension_info["Steps"].append(steps)
-            #                    self.dimension_info["Axis"].append({"Axis":key,"3D_min":values_list[0],"3D_delta":values_list[1],"Steps":steps})
-
-            """ Set up quicker spectra for k-doping manipulator move - fake spectra """
+            """ Set up k-doping manipulator move """
             if self.k_radiobutton.isChecked():
+                "TODO: add functionality!"
+                pass
 
-                #                self.dimension_info.append({"Axis":"K-dose","3D_min":0,"3D_delta":1,"Steps":self.k_dictionary.get("Repeat N")})
-                self.dimension_info["Axis"].append("K-dose")
-                self.dimension_info["3D_min"].append(0)
-                self.dimension_info["3D_delta"].append(1)
-                self.dimension_info["Steps"].append(self.k_dictionary.get("Repeat N"))
-
-                self.spectra_dictionary_K = self.spectra_dictionary_original.copy()
-
-                for i in [' X ', ' Y ', ' Z ', ' Tilt ', ' Polar ', ' Azimuth ']:
-                    self.spectra_dictionary_K[i] = self.k_dictionary[i]
-
-                if (float(self.spectra_dictionary_original.get(" Step (FAT),eV ")) >= 0.001) and (
-                        float(self.spectra_dictionary_original.get(" Step (FAT),eV ")) <= 10.0):
-                    self.spectra_dictionary_K[' Step (FAT),eV '] = float(
-                        self.spectra_dictionary_original.get(' KE_end,eV ')) - \
-                                                                   float(self.spectra_dictionary_original.get(
-                                                                       ' KE_start,eV '))
-
-                if (int(self.spectra_dictionary_original.get(" Samples (SFAT) ")) >= 1) and (
-                        int(self.spectra_dictionary_original.get(" Samples (SFAT) ")) <= 10000):
-                    self.spectra_dictionary_K[' Dwell,s '] = 0
-
-                print(" Spectra dictionary for K-dose: ", self.spectra_dictionary_K)
-
-            print(" Spectra dictionary ORIGINAL: ", self.spectra_dictionary_original)
-            print("3D dimension: ", self.dimension_info)
-            self.main_measure_spectra()
+            print("Spectra dictionary ORIGINAL: ", self.spectra_dictionary_original)
+            print("Carving positions: ", self.carving_positions_dict)
+            self.main_start_measure_spectra()
 
         else:
             self.start_button.setText('Start')
             self.ARPES_table.setEnabled(True)
             self.main_stop_measurement()
 
-    def main_measure_spectra(self):
-        print("prepare to measure spectra")
-        self.spectra_dictionary = self.spectra_dictionary_original.copy()
+    def main_start_measure_spectra(self):
+        """ Move manipulator to the measurement position and proceed with analyser settings """
+        """ Set up analyser settings"""
+        self.set_analyser_check = self.MyProdigy.set_analyzer_parameters(self.spectra_dictionary_original)
+        """ Set up spectrum settings"""
+        if self.set_analyser_check:
+            self.set_spectrum_check = self.MyProdigy.define_spectra(self.spectra_dictionary_original)
+            if self.set_spectrum_check:
+                print ("Analyser and Spectra set up SUCCESSFUL")
+                """Set up manipulator to the starting position and proceed further with spectra validation and 
+                measurement """
+                self.first_position = {key:self.carving_positions_dict[key][0] for key in
+                                       self.carving_positions_dict.keys()}
+                self.MyCarving.move_carving(self.first_position)
 
-        """ Check if the data that one needs to measure are 3D data: positions vector or K-dope active """
-        try:
-            self.dimension_steps = int(self.dimension_info.get("Steps")[0])
-        except:
-            self.dimension_steps = 0
+    def check_what_to_do_next(self):
+        if self.repeat_counter <= int(self.spectra_dictionary_original['Repeat']):
+            "repeat measurement"
+            self.repeat_counter += 1
+            self.MyProdigy.start_measurement(self.spectra_dictionary_original,self.carving_positions_dict)
+        else:
+            'move to the next carving position'
+            self.repeat_counter = 1
+            self.positions_counter += 1
+            "check if all manipulator positions were measured"
+            if self.positions_counter <= self.axis_range:
+                self.next_position = {key:self.carving_positions_dict[key][self.positions_counter-1] for key in
+                                       self.carving_positions_dict.keys()}
+                self.MyCarving.move_carving(self.next_position)
+            else:
+                self.main_stop_measurement()
             pass
-
-        if (self.dimension_steps > 0) and not self.k_radiobutton.isChecked():
-            """ Set up one of the 3D data measurements steps """
-            for i in range(len(self.dimension_info["Axis"])):
-                try:
-                    self.spectra_dictionary[self.dimension_info.get("Axis")[i]] = \
-                        self.steps_counter * float(self.dimension_info.get("3D_delta")[i]) + float(
-                            self.dimension_info.get("3D_min")[i])
-                except:
-                    print("error setting up spectra dictionary from 3D info")
-                    pass
-            print("set up one spectra: ", self.spectra_dictionary)
-
-        """ Set up manipulator positon and proceed further with spectra validation and mesurement """
-        self.MyProdigy.position_carving(self.spectra_dictionary_original, self.spectra_dictionary, self.fake_flag,
-                                        self.dimension_info, self.repeat_counter)
 
     def move_to_evaporation(self):
 
@@ -308,7 +326,7 @@ class Window(QtWidgets.QWidget):
             print("moving to evaporation position")
             self.k_wait_flag = True
             self.MyProdigy.position_carving(self.spectra_dictionary_original, self.spectra_dictionary_K, self.fake_flag,
-                                            self.dimension_info, self.repeat_counter)
+                                            self.carving_positions_dict, self.repeat_counter)
             " wait until move is finished "
         else:
             print("K-dose experiment ACHIEVED")
@@ -318,11 +336,11 @@ class Window(QtWidgets.QWidget):
     def start_evaporation(self):
         "evaporate potassium"
         self.k_counter += 1
-        self.KEvaporation.start(self.k_dictionary)
+        # self.Doping.start(self.k_dictionary)
 
     def evaporation_end(self):
         self.k_wait_flag = False
-        self.main_measure_spectra()
+        self.main_start_measure_spectra()
 
     def main_end_measurement(self):
         """ after each measured spectra self.fake_flag must change if k-dope is active """
@@ -341,10 +359,10 @@ class Window(QtWidgets.QWidget):
                     if (self.steps_counter >= self.dimension_steps):
                         self.main_stop_measurement()
                     else:
-                        self.main_measure_spectra()
+                        self.main_start_measure_spectra()
                 else:
                     self.repeat_counter += 1
-                    self.main_measure_spectra()
+                    self.main_start_measure_spectra()
             else:
                 self.can_evaporate_trigger.emit()
 
@@ -354,17 +372,8 @@ class Window(QtWidgets.QWidget):
 
         try:
             self.MyProdigy.communicate('Abort')
-        except:
-            pass
-
-        #        try:
-        #            self.MyProdigy.communicate('SetSafeState')
-        #        except:
-        #            pass
-
-        try:
-            self.KEvaporation.stop()
-        except:
+        except Exception as e:
+            print (e)
             pass
 
     def closeEvent(self, event):

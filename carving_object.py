@@ -11,9 +11,10 @@ import PyQt5.QtCore
 import socket
 import select
 from PyQt5.QtCore import QObject, QRunnable, QTimer, pyqtSignal, pyqtSlot
+import time
 
 
-class ConnectCarving(QObject):
+class CarvingObject(QObject):
     progress_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool)
 
@@ -21,7 +22,7 @@ class ConnectCarving(QObject):
         super(self.__class__, self).__init__()
         self.connection_flag = False
         self.host = socket.gethostbyname(socket.gethostname())  # temporary
-        self.port = 63210
+        self.port = 63250
         print("connect carving initialized")
         if not self.connection_flag:
             print('establishing connection with Carving ', self.host)
@@ -39,35 +40,39 @@ class ConnectCarving(QObject):
             pass
 
     def move_carving(self, position):
-        """ Move carving to a desired position, then wait until the finished reply arrives"""
+        """ Move carving to a desired position, then wait until the finished reply arrives
+        :type position: dict
+        """
+        print ("now will check if positions are ok")
         self.position = position
         self.axis_position = ""  # (" X ", " Y ", " Z ", "Pol", "Azi", "Tilt")
         self.position_correct_flag = False
         if (float(self.position.get(" X ")) >= -15.0) and (
                 float(self.position.get(" X ")) <= 15.0):
-            self.axis_position += self.position.get(" X ")
+            self.axis_position += str(self.position[" X "])+','
             if (float(self.position.get(" Y ")) >= -10.0) and (
                     float(self.position.get(" Y ")) <= 10.0):
-                self.axis_position += "," + self.position.get(" Y ")
+                self.axis_position += str(self.position[" Y "])+','
                 if (float(self.position.get(" Z ")) >= -5.0) and (
                         float(self.position.get(" Z ")) <= 202.0):
-                    self.axis_position += "," + self.position.get(" Z ")
+                    self.axis_position += str(self.position[" Z "])+','
                     if (float(self.position.get(" Polar ")) >= -180.0) and (
                             float(self.position.get(" Polar ")) <= 180.0):
-                        self.axis_position += "," + self.position.get(" Polar ")
+                        self.axis_position += str(self.position[" Polar "])+','
                         if (float(self.position.get(" Azimuth ")) >= -90.0) and (
                                 float(self.position.get(" Azimuth ")) <= 270.0):
-                            self.axis_position += "," + self.position.get(" Azimuth ")
+                            self.axis_position += str(self.position[" Azimuth "])+','
                             if (float(self.position.get(" Tilt ")) >= -32.0) and (
                                     float(self.position.get(" Tilt ")) <= 32.0):
-                                self.axis_position += "," + self.position.get(" Tilt ")
+                                self.axis_position += str(self.position[" Tilt "])
                                 self.position_correct_flag = True
-
+                                print ("looks good")
+                                
         if self.position_correct_flag:
             try:
                 print(self.mySocket.getsockname())
                 print('attempt to send: ', self.axis_position)
-                # self.mySocket.setblocking(0)
+                self.mySocket.setblocking(0)
                 try:
                     message = str(self.axis_position)
                     self.mySocket.send(message.encode())
@@ -76,26 +81,30 @@ class ConnectCarving(QObject):
                     ready = select.select([self.mySocket], [], [], timeout)
                     if ready[0]:
                         response = self.mySocket.recv(1024).decode()
-                        print('Received from server: ' + response)
+                        print('Received from CARVING server: ' + response)
                 except Exception as e:
                     print('error here', e)
                     self.connection_flag = False
                     pass
             except:
                 pass
-            if self.axis_position in response:
+            
+            if "OK" in response:
                 finished_flag = False
-                while not finished_flag:
-                    try:
-                        finished_response = self.mySocket.recv(1024).decode()
-                    except:
-                        pass
-                    try:
-                        if finished_response == "finished":
-                            print("carving movement completed", finished_response)
-                            self.finished_signal.emit(True)
-                    except:
-                        pass
+            while not finished_flag:
+                time.sleep(0.1)
+                try:
+                    finished_response = self.mySocket.recv(1024).decode()
+                    print ("received from Carving server ", finished_response)
+                except:
+                    pass
+                try:
+                    if finished_response == "finished":
+                        finished_flag = True
+                        print("carving movement completed", finished_response)
+                        self.finished_signal.emit(True)
+                except:
+                    pass
 
     def close(self):
         try:
